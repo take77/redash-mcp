@@ -1,0 +1,7 @@
+.env
+*.env
+!*.env.example
+profiles/*.env
+!profiles/*.env.example
+__pycache__/
+*.pyc

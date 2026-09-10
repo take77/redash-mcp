@@ -17,6 +17,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 server_path="$script_dir/redash_mcp.py"
 expected_tool_count=8
+last_response_id=5
 max_wait_sec=30
 
 response_file="$(mktemp)"
@@ -39,7 +40,7 @@ warm_up_dependencies() {
 wait_for_last_response() {
   local waited=0
   while [ "$waited" -lt "$max_wait_sec" ]; do
-    if grep -q '"id":4' "$response_file"; then
+    if grep -q "\"id\":$last_response_id" "$response_file"; then
       return
     fi
     sleep 1
@@ -54,6 +55,7 @@ collect_responses() {
     printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
     printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_query","arguments":{"sql":"PRAGMA smoke_test","data_source_id":1}}}'
     printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_data_sources","arguments":{}}}'
+    printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_query","arguments":{"sql":"SELECT * INTO smoke_copy FROM smoke_source","data_source_id":1}}}'
     wait_for_last_response
   } | uv run "$server_path" >"$response_file" 2>"$log_file" || true
 }
@@ -98,6 +100,8 @@ assert_response_contains 1 "サーバーが initialize に応答する" '"name":
 assert_tool_count
 # 2.x は ToolError 派生でない例外の本文を伏せるため、理由が届くかどうかまで見る。
 assert_response_contains 3 "read-only ガードの理由がクライアントに届く" '読み取り専用 SQL のみ許可しています'
+# SELECT ... INTO はテーブルを作るので、SELECT 始まりでも弾けなければならない。
+assert_response_contains 5 "SELECT ... INTO が read-only ガードに弾かれる" '書き込み・DDL 系キーワードを検出した'
 
 if has_redash_credentials; then
   assert_response_contains 4 "Redash からデータソース一覧を取得できる" '"isError":false'

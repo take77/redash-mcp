@@ -89,7 +89,8 @@ claude mcp add redash-staging --scope local \
 ## 安全設計
 
 - **read-only ガード**: `run_query` は既定で `SELECT / WITH / EXPLAIN / SHOW` 始まりのみ許可し、
-  `INSERT/UPDATE/DELETE/DROP/...` 等を検出すると拒否します
+  `INSERT/UPDATE/DELETE/DROP/...` 等を検出すると拒否します。
+  テーブルを作ってしまう `SELECT ... INTO` も拒否対象です
   (一次防御はあくまで Redash データソースが read-only レプリカであること)。
   解除する場合のみ `REDASH_ALLOW_WRITE=1`。
 - **行数キャップ**: 結果は既定 1000 行で切り、超過時は `truncated: true` と `note` で通知します

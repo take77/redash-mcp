@@ -158,8 +158,11 @@ def _raise_for_status(resp: httpx.Response) -> None:
 # --------------------------------------------------------------------------- #
 # SQL 安全チェック (多層防御。一次防御はあくまで read-only データソース)
 # --------------------------------------------------------------------------- #
+# into を含むのは SELECT ... INTO 対策。PostgreSQL では CREATE TABLE AS と等価に
+# テーブルを作るため、SELECT 始まりでも通してはいけない。
+# (INSERT INTO は insert 側で既に弾かれる)
 _FORBIDDEN = re.compile(
-    r"\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|"
+    r"\b(insert|into|update|delete|drop|alter|truncate|create|grant|revoke|"
     r"merge|replace|call|do|copy|vacuum|analyze|reindex|cluster|comment\s+on)\b",
     re.IGNORECASE,
 )

@@ -4,7 +4,7 @@ Claude Code から Redash を直接叩くための MCP サーバー。
 本番レプリカ(read-only)に対するアドホック SQL 実行・保存クエリ実行・各種参照を提供します。
 「SQL を手で Redash にコピペ」する運用を、Claude Code 内で完結させます。
 
-設置場所は法人中立な `~/tools/redash-mcp/`（特定法人のリポジトリに依存させない）。
+設置場所は法人中立な `~/Developments/tools/redash-mcp/`（特定法人のリポジトリに依存させない）。
 **法人ごとに 1 つの Redash** を、**法人ディレクトリで起動したときの既定 `redash`** として割り当てる運用を想定。
 
 ## 構成
@@ -33,7 +33,7 @@ Claude Code から Redash を直接叩くための MCP サーバー。
 ### 1. その法人の接続情報を作成
 
 ```bash
-cd ~/tools/redash-mcp/profiles
+cd ~/Developments/tools/redash-mcp/profiles
 cp prod.env.example <法人>.env       # 例: lx.env
 # <法人>.env を編集して REDASH_URL と REDASH_API_KEY を記入
 ```
@@ -48,8 +48,8 @@ API キーは Redash 右上アバター → **Edit Profile → API Key** で取�
 
 ```bash
 claude mcp add redash --scope local \
-  -e REDASH_ENV_FILE=$HOME/tools/redash-mcp/profiles/<法人>.env \
-  -- uv run $HOME/tools/redash-mcp/redash_mcp.py
+  -e REDASH_ENV_FILE=$HOME/Developments/tools/redash-mcp/profiles/<法人>.env \
+  -- uv run $HOME/Developments/tools/redash-mcp/redash_mcp.py
 ```
 
 これで「その法人ディレクトリで起動したときの既定 `redash`」がその法人の Redash になります。
@@ -80,8 +80,8 @@ Claude Code を再起動すると `mcp__redash__*` ツールが使えます。
 
 ```bash
 claude mcp add redash-staging --scope local \
-  -e REDASH_ENV_FILE=$HOME/tools/redash-mcp/profiles/<法人>-staging.env \
-  -- uv run $HOME/tools/redash-mcp/redash_mcp.py
+  -e REDASH_ENV_FILE=$HOME/Developments/tools/redash-mcp/profiles/<法人>-staging.env \
+  -- uv run $HOME/Developments/tools/redash-mcp/redash_mcp.py
 # → mcp__redash__*（既定=本番） と mcp__redash-staging__* を使い分け
 ```
 
@@ -100,7 +100,7 @@ claude mcp add redash-staging --scope local \
 サーバー単体の起動確認:
 
 ```bash
-cd ~/tools/redash-mcp
-REDASH_ENV_FILE=$HOME/tools/redash-mcp/profiles/<法人>.env uv run redash_mcp.py
+cd ~/Developments/tools/redash-mcp
+REDASH_ENV_FILE=$HOME/Developments/tools/redash-mcp/profiles/<法人>.env uv run redash_mcp.py
 # 依存を解決して stdio で待受 (Ctrl-C で終了)
 ```

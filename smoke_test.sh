@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # redash MCP サーバーのスモークテスト。
 #
-# 「起動して主要な応答を返せるか」を 1 コマンドで確かめる。
-# mcp SDK のメジャーアップ (v1 -> v2) でサーバーが起動不能になった事故があり、
-# この種の破壊は Claude Code を再起動しなくても手元で検知できるようにしておく。
+# 「起動して、クライアントに正しい応答を返せるか」を 1 コマンドで確かめる。
+# mcp SDK のメジャーアップ (v1 -> v2) で起動不能になった事故と、
+# 2.x でツールのエラー本文が伏せられる退行の両方を検知することが目的。
+#
+# 判定はサーバーの標準出力 (= MCP クライアントに届く応答) だけで行う。
+# stderr のログを混ぜると、クライアントに何も届いていなくてもログ側の文言に
+# マッチして通ってしまうため、両者は必ず分けておくこと。
 #
 # 使い方:
 #   ./smoke_test.sh                                   # 隣の .env を読む
@@ -13,10 +17,11 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 server_path="$script_dir/redash_mcp.py"
 expected_tool_count=8
-response_wait_sec=8
+max_wait_sec=30
 
-output_file="$(mktemp)"
-trap 'rm -f "$output_file"' EXIT
+response_file="$(mktemp)"
+log_file="$(mktemp)"
+trap 'rm -f "$response_file" "$log_file"' EXIT
 failures=0
 
 # 接続情報が無い環境では Redash への実アクセスを伴う検査だけ飛ばす。
@@ -25,12 +30,23 @@ has_redash_credentials() {
   [ -f "$env_file" ] || [ -n "${REDASH_URL:-}" ]
 }
 
-# 依存の初回ダウンロードを本番セッションの外で済ませる (待ち時間が伸びるのを防ぐ)。
+# 依存の初回ダウンロードを本番セッションの外で済ませ、待ち時間を予測可能にする。
 warm_up_dependencies() {
   uv run "$server_path" </dev/null >/dev/null 2>&1 || true
 }
 
-# MCP の初期化からツール呼び出しまでを stdio に流し込み、応答を output_file に集める。
+# 最後の応答が届くまで stdin を開いたまま待つ。届かなければ制限時間で打ち切る。
+wait_for_last_response() {
+  local waited=0
+  while [ "$waited" -lt "$max_wait_sec" ]; do
+    if grep -q '"id":4' "$response_file"; then
+      return
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+}
+
 collect_responses() {
   {
     printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0"}}}'
@@ -38,8 +54,8 @@ collect_responses() {
     printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
     printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_query","arguments":{"sql":"PRAGMA smoke_test","data_source_id":1}}}'
     printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_data_sources","arguments":{}}}'
-    sleep "$response_wait_sec"
-  } | uv run "$server_path" >"$output_file" 2>&1 || true
+    wait_for_last_response
+  } | uv run "$server_path" >"$response_file" 2>"$log_file" || true
 }
 
 report() {
@@ -52,9 +68,10 @@ report() {
   failures=$((failures + 1))
 }
 
-assert_contains() {
-  local label="$1" expected="$2"
-  if grep -qF "$expected" "$output_file"; then
+# 指定した id の応答行だけを見る (サーバーログではなくクライアントが受け取る内容)。
+assert_response_contains() {
+  local response_id="$1" label="$2" expected="$3"
+  if grep "\"id\":$response_id" "$response_file" | grep -qF "$expected"; then
     report yes "$label"
   else
     report no "$label"
@@ -64,7 +81,8 @@ assert_contains() {
 assert_tool_count() {
   local actual
   # tools/list は 1 行で返るため、行数ではなく出現数を数える。
-  actual="$(grep -o '"inputSchema"' "$output_file" | wc -l)"
+  # 起動に失敗していると 0 件になるので、そこでスクリプトを止めない。
+  actual="$(grep -o '"inputSchema"' "$response_file" | wc -l || true)"
   if [ "$actual" -eq "$expected_tool_count" ]; then
     report yes "ツールが $expected_tool_count 個登録されている"
   else
@@ -76,25 +94,24 @@ echo "redash MCP スモークテスト: $server_path"
 warm_up_dependencies
 collect_responses
 
-assert_contains "サーバーが initialize に応答する" '"serverInfo":{"name":"redash"'
+assert_response_contains 1 "サーバーが initialize に応答する" '"name":"redash"'
 assert_tool_count
-# 1.x では任意の例外の本文が届いていたが、2.x は ToolError の派生でないと本文が伏せられる。
-assert_contains "read-only ガードの理由がクライアントに届く" '読み取り専用 SQL のみ許可しています'
+# 2.x は ToolError 派生でない例外の本文を伏せるため、理由が届くかどうかまで見る。
+assert_response_contains 3 "read-only ガードの理由がクライアントに届く" '読み取り専用 SQL のみ許可しています'
 
 if has_redash_credentials; then
-  # エラー応答も result で返るため、その呼び出しが成功扱いかどうかまで見る。
-  if grep '"id":4' "$output_file" | grep -qF '"isError":false'; then
-    report yes "Redash からデータソース一覧を取得できる"
-  else
-    report no "Redash からデータソース一覧を取得できる"
-  fi
+  assert_response_contains 4 "Redash からデータソース一覧を取得できる" '"isError":false'
 else
   echo "  SKIP Redash への実アクセス (接続情報が無いため)"
 fi
 
 if [ "$failures" -gt 0 ]; then
-  echo "失敗 $failures 件。応答の全文:"
-  cat "$output_file"
+  echo
+  echo "失敗 $failures 件。"
+  echo "--- サーバーの応答 ---"
+  cat "$response_file"
+  echo "--- サーバーのログ ---"
+  cat "$log_file"
   exit 1
 fi
 

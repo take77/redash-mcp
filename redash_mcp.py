@@ -11,6 +11,7 @@ Redash MCP server (read-only oriented).
 
 Claude Code から Redash を直接叩くための MCP サーバー。
 本番レプリカ(read-only)に対するアドホック SQL 実行 / 保存クエリ実行 / 各種参照を提供する。
+書き込みは保存クエリの SQL 本文の更新 (update_query) だけで、DB には書き込まない。
 
 接続情報は環境変数、または env ファイルから読む。読み込み元は次の優先順:
     1. MCP 設定の -e で渡された環境変数 (最優先)
@@ -345,7 +346,10 @@ async def list_queries(search: str | None = None, page_size: int = 25, page: int
 
 @mcp.tool()
 async def get_query(query_id: int) -> dict:
-    """保存クエリの詳細 (SQL 本文・パラメータ定義・データソース等) を返す。"""
+    """保存クエリの詳細 (SQL 本文・パラメータ定義・データソース等) を返す。
+
+    version は update_query に渡す値。schedule が null なら自動更新は無い。
+    """
     _require_config()
     async with _client() as client:
         q = await _get(client, f"/api/queries/{query_id}")
@@ -358,6 +362,37 @@ async def get_query(query_id: int) -> dict:
             "latest_query_data_id": q.get("latest_query_data_id"),
             "updated_at": q.get("updated_at"),
             "tags": q.get("tags"),
+            "is_draft": q.get("is_draft"),
+            "is_archived": q.get("is_archived"),
+            "schedule": q.get("schedule"),
+            "version": q.get("version"),
+        }
+
+
+@mcp.tool()
+async def update_query(query_id: int, query: str, version: int) -> dict:
+    """保存クエリの SQL 本文だけを書き換える。名前・パラメータ定義・可視化は変えない。
+
+    Args:
+        query_id: 書き換える保存クエリの ID。
+        query: 新しい SQL 本文。run_query と同じ read-only ガードを通す。
+        version: 直前に get_query で取得した version。一致しなければ Redash が 409 を返す。
+            ただし Redash は本文を更新しても version を増やさない (2026-09 に実機で確認)
+            ため、これでは他者の編集を検出できない。上書きしてよいかは、直前に
+            get_query で本文を取り直して確かめること。
+    """
+    # 保存した SQL は後で誰かが実行するので、実行時と同じ基準で保存時にも弾く。
+    _assert_read_only(query)
+    _require_config()
+    async with _client() as client:
+        q = await _post(
+            client, f"/api/queries/{query_id}", {"query": query, "version": version}
+        )
+        return {
+            "id": q.get("id"),
+            "name": q.get("name"),
+            "version": q.get("version"),
+            "updated_at": q.get("updated_at"),
         }
 
 

@@ -106,7 +106,8 @@ v2 で変わった点のうち、このサーバーに効いてくるのは次�
 - `FastMCP` は `MCPServer` に改名 (`mcp.server.mcpserver`)
 - ツールが投げた例外は `ToolError` の派生でないと本文が伏せられ、
   モデルには `Error executing tool <名前>` としか見えない。
-  そのため `RedashError` は `ToolError` を継承しています
+  そのため `RedashError` は `ToolError` を継承し、通信エラーや
+  JSON でない応答も `RedashError` に翻訳しています
 
 ## 動作確認
 

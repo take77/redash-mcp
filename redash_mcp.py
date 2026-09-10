@@ -98,7 +98,7 @@ def _require_config() -> None:
     if missing:
         raise RedashError(
             f"環境変数が未設定です: {', '.join(missing)}。"
-            " tools/redash-mcp/.env か MCP 設定の env で指定してください。"
+            " 本ファイルと同じディレクトリの .env か MCP 設定の env で指定してください。"
         )
 
 
@@ -113,16 +113,34 @@ def _client() -> httpx.AsyncClient:
     )
 
 
+# 通信と JSON 解釈の失敗は RedashError に翻訳する。mcp 2.x は ToolError 派生以外の
+# 例外の本文を伏せるため、翻訳しないと接続不能や設定ミスの原因がモデルに届かない。
 async def _get(client: httpx.AsyncClient, path: str, **kwargs: Any) -> Any:
-    resp = await client.get(path, **kwargs)
+    try:
+        resp = await client.get(path, **kwargs)
+    except httpx.HTTPError as exc:
+        raise RedashError(f"Redash への接続に失敗しました: {exc}") from exc
     _raise_for_status(resp)
-    return resp.json()
+    return _parse_json(resp)
 
 
 async def _post(client: httpx.AsyncClient, path: str, json: dict) -> Any:
-    resp = await client.post(path, json=json)
+    try:
+        resp = await client.post(path, json=json)
+    except httpx.HTTPError as exc:
+        raise RedashError(f"Redash への接続に失敗しました: {exc}") from exc
     _raise_for_status(resp)
-    return resp.json()
+    return _parse_json(resp)
+
+
+def _parse_json(resp: httpx.Response) -> Any:
+    # SSO のログイン画面が返る等、JSON でない応答を読める失敗にする。
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise RedashError(
+            f"Redash の応答が JSON ではありません: {resp.text[:200]}"
+        ) from exc
 
 
 def _raise_for_status(resp: httpx.Response) -> None:
@@ -271,8 +289,9 @@ async def run_query(
         max_rows: 返す最大行数 (既定 REDASH_MAX_ROWS)。超過分は切り捨てて note で通知。
         max_age: キャッシュ許容秒。0 で必ず再実行、>0 で同条件の既存結果を再利用。
     """
-    _require_config()
+    # SQL の妥当性は接続設定に依存しないので、設定チェックより先に判定する。
     _assert_read_only(sql)
+    _require_config()
     rows_cap = max_rows or REDASH_MAX_ROWS
     payload = {
         "query": sql,

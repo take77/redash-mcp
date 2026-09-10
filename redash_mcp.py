@@ -324,12 +324,12 @@ async def list_queries(search: str | None = None, page_size: int = 25, page: int
     """
     _require_config()
     params: dict[str, Any] = {"page": page, "page_size": page_size}
-    path = "/api/queries"
+    # 検索も一覧と同じエンドポイントに q を付けて行う。/api/queries/search は
+    # 新しい Redash で廃止され、301 で /api/queries?q= に転送される (httpx は追わない)。
     if search:
-        path = "/api/queries/search"
-        params = {"q": search, "page": page, "page_size": page_size}
+        params["q"] = search
     async with _client() as client:
-        data = await _get(client, path, params=params)
+        data = await _get(client, "/api/queries", params=params)
         results = data.get("results", data) if isinstance(data, dict) else data
         return [
             {

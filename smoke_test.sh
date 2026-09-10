@@ -17,7 +17,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 server_path="$script_dir/redash_mcp.py"
 expected_tool_count=9
-asserted_response_ids="1 2 3 4 5 6 7"
+asserted_response_ids="1 2 3 4 5 6 7 8"
 max_wait_sec=30
 
 response_file="$(mktemp)"
@@ -68,6 +68,7 @@ collect_responses() {
     printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"run_query","arguments":{"sql":"SELECT REPLACE(CHR(97), CHR(97), CHR(98)) AS replaced","data_source_id":1}}}'
     # 存在しない query_id に送る。ガードが壊れていても実在のクエリは書き換わらない。
     printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"update_query","arguments":{"query_id":999999999,"query":"CREATE TABLE smoke_must_not_exist (id int)","version":1}}}'
+    printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"list_queries","arguments":{"search":"a","page_size":1}}}'
     wait_for_asserted_responses
   } | uv run "$server_path" >"$response_file" 2>"$log_file" || true
 }
@@ -137,6 +138,8 @@ assert_response_contains 7 "update_query も read-only ガードを通す" '読�
 if has_redash_credentials; then
   assert_response_contains 4 "Redash からデータソース一覧を取得できる" '"isError":false'
   assert_response_contains 6 "REPLACE() を含む SELECT を Redash で実行できる" '"isError":false'
+  # 旧 /api/queries/search は 301 を返して失敗していた。
+  assert_response_contains 8 "list_queries の検索が Redash から結果を返す" '"isError":false'
 else
   echo "  SKIP Redash への実アクセス (接続情報が無いため)"
 fi

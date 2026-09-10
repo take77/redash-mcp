@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#   "mcp>=1.2.0",
+#   "mcp>=2.2,<3",  # メジャーアップで API が変わるため上限を固定
 #   "httpx>=0.27",
 # ]
 # ///
@@ -34,7 +34,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 
 # --------------------------------------------------------------------------- #
@@ -73,14 +74,19 @@ REDASH_ALLOW_WRITE = os.environ.get("REDASH_ALLOW_WRITE", "").lower() in ("1", "
 # Redash の job ステータス
 _JOB_PENDING, _JOB_STARTED, _JOB_SUCCESS, _JOB_FAILURE, _JOB_CANCELLED = 1, 2, 3, 4, 5
 
-mcp = FastMCP("redash")
+mcp = MCPServer("redash", version="0.1.0")
 
 
 # --------------------------------------------------------------------------- #
 # HTTP ヘルパ
 # --------------------------------------------------------------------------- #
-class RedashError(Exception):
-    """Redash 由来 / 設定不備のエラー。ツールから読める形で投げ直す。"""
+class RedashError(ToolError):
+    """Redash 由来 / 設定不備のエラー。ツールから読める形で投げ直す。
+
+    mcp 2.x はツールが投げた例外のうち ToolError の派生だけを本文ごと
+    クライアントに渡し、それ以外は "Error executing tool <名前>" に
+    差し替えて本文を伏せる。原因をモデルに読ませたいので継承する。
+    """
 
 
 def _require_config() -> None:
@@ -92,7 +98,7 @@ def _require_config() -> None:
     if missing:
         raise RedashError(
             f"環境変数が未設定です: {', '.join(missing)}。"
-            " tools/redash-mcp/.env か MCP 設定の env で指定してください。"
+            " 本ファイルと同じディレクトリの .env か MCP 設定の env で指定してください。"
         )
 
 
@@ -107,16 +113,34 @@ def _client() -> httpx.AsyncClient:
     )
 
 
+# 通信と JSON 解釈の失敗は RedashError に翻訳する。mcp 2.x は ToolError 派生以外の
+# 例外の本文を伏せるため、翻訳しないと接続不能や設定ミスの原因がモデルに届かない。
 async def _get(client: httpx.AsyncClient, path: str, **kwargs: Any) -> Any:
-    resp = await client.get(path, **kwargs)
+    try:
+        resp = await client.get(path, **kwargs)
+    except httpx.HTTPError as exc:
+        raise RedashError(f"Redash への接続に失敗しました: {exc}") from exc
     _raise_for_status(resp)
-    return resp.json()
+    return _parse_json(resp)
 
 
 async def _post(client: httpx.AsyncClient, path: str, json: dict) -> Any:
-    resp = await client.post(path, json=json)
+    try:
+        resp = await client.post(path, json=json)
+    except httpx.HTTPError as exc:
+        raise RedashError(f"Redash への接続に失敗しました: {exc}") from exc
     _raise_for_status(resp)
-    return resp.json()
+    return _parse_json(resp)
+
+
+def _parse_json(resp: httpx.Response) -> Any:
+    # SSO のログイン画面が返る等、JSON でない応答を読める失敗にする。
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise RedashError(
+            f"Redash の応答が JSON ではありません: {resp.text[:200]}"
+        ) from exc
 
 
 def _raise_for_status(resp: httpx.Response) -> None:
@@ -134,8 +158,11 @@ def _raise_for_status(resp: httpx.Response) -> None:
 # --------------------------------------------------------------------------- #
 # SQL 安全チェック (多層防御。一次防御はあくまで read-only データソース)
 # --------------------------------------------------------------------------- #
+# into を含むのは SELECT ... INTO 対策。PostgreSQL では CREATE TABLE AS と等価に
+# テーブルを作るため、SELECT 始まりでも通してはいけない。
+# (INSERT INTO は insert 側で既に弾かれる)
 _FORBIDDEN = re.compile(
-    r"\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|"
+    r"\b(insert|into|update|delete|drop|alter|truncate|create|grant|revoke|"
     r"merge|replace|call|do|copy|vacuum|analyze|reindex|cluster|comment\s+on)\b",
     re.IGNORECASE,
 )
@@ -157,9 +184,10 @@ def _assert_read_only(sql: str) -> None:
             "SELECT / WITH / EXPLAIN / SHOW で始まる読み取り専用 SQL のみ許可しています"
             " (REDASH_ALLOW_WRITE=1 で解除可)。"
         )
-    if _FORBIDDEN.search(cleaned):
+    forbidden = _FORBIDDEN.search(cleaned)
+    if forbidden:
         raise RedashError(
-            "書き込み・DDL 系キーワードを検出したため実行を拒否しました"
+            f"書き込み・DDL 系キーワード ({forbidden.group(0)}) を検出したため実行を拒否しました"
             " (REDASH_ALLOW_WRITE=1 で解除可)。"
         )
 
@@ -265,8 +293,9 @@ async def run_query(
         max_rows: 返す最大行数 (既定 REDASH_MAX_ROWS)。超過分は切り捨てて note で通知。
         max_age: キャッシュ許容秒。0 で必ず再実行、>0 で同条件の既存結果を再利用。
     """
-    _require_config()
+    # SQL の妥当性は接続設定に依存しないので、設定チェックより先に判定する。
     _assert_read_only(sql)
+    _require_config()
     rows_cap = max_rows or REDASH_MAX_ROWS
     payload = {
         "query": sql,

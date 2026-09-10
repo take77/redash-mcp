@@ -161,9 +161,12 @@ def _raise_for_status(resp: httpx.Response) -> None:
 # into を含むのは SELECT ... INTO 対策。PostgreSQL では CREATE TABLE AS と等価に
 # テーブルを作るため、SELECT 始まりでも通してはいけない。
 # (INSERT INTO は insert 側で既に弾かれる)
+# replace は入れない。REPLACE 文 (MySQL の REPLACE INTO) は into 側で、
+# CREATE OR REPLACE は create 側で弾かれる。入れると文字列関数 REPLACE() を含む
+# 読み取り SQL まで拒否してしまう。
 _FORBIDDEN = re.compile(
     r"\b(insert|into|update|delete|drop|alter|truncate|create|grant|revoke|"
-    r"merge|replace|call|do|copy|vacuum|analyze|reindex|cluster|comment\s+on)\b",
+    r"merge|call|do|copy|vacuum|analyze|reindex|cluster|comment\s+on)\b",
     re.IGNORECASE,
 )
 _ALLOWED_START = re.compile(r"^\s*(with|select|explain|show)\b", re.IGNORECASE)

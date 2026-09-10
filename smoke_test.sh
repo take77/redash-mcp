@@ -17,7 +17,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 server_path="$script_dir/redash_mcp.py"
 expected_tool_count=8
-asserted_response_ids="1 2 3 4 5"
+asserted_response_ids="1 2 3 4 5 6"
 max_wait_sec=30
 
 response_file="$(mktemp)"
@@ -65,6 +65,7 @@ collect_responses() {
     printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_query","arguments":{"sql":"PRAGMA smoke_test","data_source_id":1}}}'
     printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_data_sources","arguments":{}}}'
     printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_query","arguments":{"sql":"SELECT * INTO smoke_copy FROM smoke_source_that_must_not_exist","data_source_id":1}}}'
+    printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"run_query","arguments":{"sql":"SELECT REPLACE(CHR(97), CHR(97), CHR(98)) AS replaced","data_source_id":1}}}'
     wait_for_asserted_responses
   } | uv run "$server_path" >"$response_file" 2>"$log_file" || true
 }
@@ -86,6 +87,21 @@ assert_response_contains() {
     report yes "$label"
   else
     report no "$label"
+  fi
+}
+
+# 指定した id の応答が届いていて、かつ特定の文言を含まないことを確かめる。
+# 応答そのものが無いときに「含まない」と誤って通さないよう、先に存在を見る。
+assert_response_lacks() {
+  local response_id="$1" label="$2" unexpected="$3"
+  if ! grep -q "\"id\":$response_id" "$response_file"; then
+    report no "$label (応答が届いていない)"
+    return
+  fi
+  if grep "\"id\":$response_id" "$response_file" | grep -qF "$unexpected"; then
+    report no "$label"
+  else
+    report yes "$label"
   fi
 }
 
@@ -111,9 +127,12 @@ assert_tool_count
 assert_response_contains 3 "read-only ガードの理由がクライアントに届く" '読み取り専用 SQL のみ許可しています'
 # SELECT ... INTO はテーブルを作るので、SELECT 始まりでも弾けなければならない。
 assert_response_contains 5 "SELECT ... INTO が read-only ガードに弾かれる" 'キーワード (INTO) を検出した'
+# 文字列関数の REPLACE() は読み取り SQL なので、ガードで弾いてはいけない。
+assert_response_lacks 6 "文字列関数 REPLACE() を含む SELECT はガードに弾かれない" 'キーワード (REPLACE)'
 
 if has_redash_credentials; then
   assert_response_contains 4 "Redash からデータソース一覧を取得できる" '"isError":false'
+  assert_response_contains 6 "REPLACE() を含む SELECT を Redash で実行できる" '"isError":false'
 else
   echo "  SKIP Redash への実アクセス (接続情報が無いため)"
 fi

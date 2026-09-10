@@ -12,6 +12,7 @@ Claude Code から Redash を直接叩くための MCP サーバー。
 - `redash_mcp.py` — MCP サーバー本体 (Python / `uv run` で自己完結。PEP 723 で依存を内蔵)
 - `.env.example` — 接続情報テンプレート
 - `profiles/` — 法人ごとの接続情報（`<法人>.env`。gitignore 済み。雛形は `prod.env.example`）
+- `smoke_test.sh` — 起動・ツール登録・Redash 疎通をまとめて確認するスモークテスト
 
 ## 提供ツール
 
@@ -95,7 +96,26 @@ claude mcp add redash-staging --scope local \
   (`max_rows` 引数 / `REDASH_MAX_ROWS` で調整)。
 - `profiles/*.env` / `.env` は `.gitignore` 済み。API キーはコミットされません。
 
-## 動作確認 (任意)
+## 依存 SDK のバージョン
+
+`mcp` SDK は `>=2.2,<3` に固定しています。以前は上限を切っておらず、
+v2 の公開に追随して v1 の `FastMCP` が消え、サーバーが起動不能になりました。
+
+v2 で変わった点のうち、このサーバーに効いてくるのは次の 2 つです。
+
+- `FastMCP` は `MCPServer` に改名 (`mcp.server.mcpserver`)
+- ツールが投げた例外は `ToolError` の派生でないと本文が伏せられ、
+  モデルには `Error executing tool <名前>` としか見えない。
+  そのため `RedashError` は `ToolError` を継承しています
+
+## 動作確認
+
+スモークテスト (起動・ツール登録・エラー本文の透過・Redash 疎通をまとめて確認):
+
+```bash
+cd ~/Developments/tools/redash-mcp
+REDASH_ENV_FILE=$HOME/Developments/tools/redash-mcp/profiles/<法人>.env ./smoke_test.sh
+```
 
 サーバー単体の起動確認:
 

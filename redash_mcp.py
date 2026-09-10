@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#   "mcp>=1.2.0",
+#   "mcp>=2.2,<3",  # メジャーアップで API が変わるため上限を固定
 #   "httpx>=0.27",
 # ]
 # ///
@@ -34,7 +34,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 
 # --------------------------------------------------------------------------- #
@@ -73,14 +74,19 @@ REDASH_ALLOW_WRITE = os.environ.get("REDASH_ALLOW_WRITE", "").lower() in ("1", "
 # Redash の job ステータス
 _JOB_PENDING, _JOB_STARTED, _JOB_SUCCESS, _JOB_FAILURE, _JOB_CANCELLED = 1, 2, 3, 4, 5
 
-mcp = FastMCP("redash")
+mcp = MCPServer("redash", version="0.1.0")
 
 
 # --------------------------------------------------------------------------- #
 # HTTP ヘルパ
 # --------------------------------------------------------------------------- #
-class RedashError(Exception):
-    """Redash 由来 / 設定不備のエラー。ツールから読める形で投げ直す。"""
+class RedashError(ToolError):
+    """Redash 由来 / 設定不備のエラー。ツールから読める形で投げ直す。
+
+    mcp 2.x はツールが投げた例外のうち ToolError の派生だけを本文ごと
+    クライアントに渡し、それ以外は "Error executing tool <名前>" に
+    差し替えて本文を伏せる。原因をモデルに読ませたいので継承する。
+    """
 
 
 def _require_config() -> None:

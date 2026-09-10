@@ -184,9 +184,10 @@ def _assert_read_only(sql: str) -> None:
             "SELECT / WITH / EXPLAIN / SHOW で始まる読み取り専用 SQL のみ許可しています"
             " (REDASH_ALLOW_WRITE=1 で解除可)。"
         )
-    if _FORBIDDEN.search(cleaned):
+    forbidden = _FORBIDDEN.search(cleaned)
+    if forbidden:
         raise RedashError(
-            "書き込み・DDL 系キーワードを検出したため実行を拒否しました"
+            f"書き込み・DDL 系キーワード ({forbidden.group(0)}) を検出したため実行を拒否しました"
             " (REDASH_ALLOW_WRITE=1 で解除可)。"
         )
 

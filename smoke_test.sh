@@ -17,7 +17,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 server_path="$script_dir/redash_mcp.py"
 expected_tool_count=8
-last_response_id=5
+asserted_response_ids="1 2 3 4 5"
 max_wait_sec=30
 
 response_file="$(mktemp)"
@@ -36,11 +36,20 @@ warm_up_dependencies() {
   uv run "$server_path" </dev/null >/dev/null 2>&1 || true
 }
 
-# 最後の応答が届くまで stdin を開いたまま待つ。届かなければ制限時間で打ち切る。
-wait_for_last_response() {
+# 最後に送ったリクエストが最初に返るとは限らない。ローカルで弾かれる SQL は
+# Redash への往復より速く返るため、id をひとつだけ待って stdin を閉じると
+# 処理中の応答が取り消される。表明対象の応答が揃うまで待つこと。
+all_asserted_responses_received() {
+  local response_id
+  for response_id in $asserted_response_ids; do
+    grep -q "\"id\":$response_id" "$response_file" || return 1
+  done
+}
+
+wait_for_asserted_responses() {
   local waited=0
   while [ "$waited" -lt "$max_wait_sec" ]; do
-    if grep -q "\"id\":$last_response_id" "$response_file"; then
+    if all_asserted_responses_received; then
       return
     fi
     sleep 1
@@ -55,8 +64,8 @@ collect_responses() {
     printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
     printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_query","arguments":{"sql":"PRAGMA smoke_test","data_source_id":1}}}'
     printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_data_sources","arguments":{}}}'
-    printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_query","arguments":{"sql":"SELECT * INTO smoke_copy FROM smoke_source","data_source_id":1}}}'
-    wait_for_last_response
+    printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_query","arguments":{"sql":"SELECT * INTO smoke_copy FROM smoke_source_that_must_not_exist","data_source_id":1}}}'
+    wait_for_asserted_responses
   } | uv run "$server_path" >"$response_file" 2>"$log_file" || true
 }
 
@@ -101,7 +110,7 @@ assert_tool_count
 # 2.x は ToolError 派生でない例外の本文を伏せるため、理由が届くかどうかまで見る。
 assert_response_contains 3 "read-only ガードの理由がクライアントに届く" '読み取り専用 SQL のみ許可しています'
 # SELECT ... INTO はテーブルを作るので、SELECT 始まりでも弾けなければならない。
-assert_response_contains 5 "SELECT ... INTO が read-only ガードに弾かれる" '書き込み・DDL 系キーワードを検出した'
+assert_response_contains 5 "SELECT ... INTO が read-only ガードに弾かれる" 'キーワード (INTO) を検出した'
 
 if has_redash_credentials; then
   assert_response_contains 4 "Redash からデータソース一覧を取得できる" '"isError":false'

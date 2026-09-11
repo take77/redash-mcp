@@ -11,7 +11,9 @@ Redash MCP server (read-only oriented).
 
 Claude Code から Redash を直接叩くための MCP サーバー。
 本番レプリカ(read-only)に対するアドホック SQL 実行 / 保存クエリ実行 / 各種参照を提供する。
-書き込みは保存クエリの SQL 本文の更新 (update_query) だけで、DB には書き込まない。
+このサーバー自身が書き込むのは、update_query で更新する保存クエリの SQL 本文だけ。
+実行する SQL は read-only ガードで検査するが、ガードだけで DB への書き込みは防ぎ切れない。
+DB を守る一次防御は read-only のデータソース。
 
 接続情報は環境変数、または env ファイルから読む。読み込み元は次の優先順:
     1. MCP 設定の -e で渡された環境変数 (最優先)

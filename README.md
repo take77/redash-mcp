@@ -22,6 +22,7 @@ Claude Code から Redash を直接叩くための MCP サーバー。
 | `run_query` | **アドホック SQL を実行**して結果を取得 (read-only ガードあり) |
 | `list_queries` | 保存クエリの検索/一覧 |
 | `get_query` | 保存クエリの SQL 本文・パラメータ定義を取得 |
+| `update_query` | 保存クエリの SQL 本文を書き換える (read-only ガードと version 照合あり) |
 | `run_saved_query` | 保存クエリを ID 指定で実行 |
 | `get_cached_result` | 保存クエリの最新キャッシュ結果を再実行せず取得 |
 | `list_dashboards` | ダッシュボード検索/一覧 |
@@ -89,10 +90,16 @@ claude mcp add redash-staging --scope local \
 ## 安全設計
 
 - **read-only ガード**: `run_query` は既定で `SELECT / WITH / EXPLAIN / SHOW` 始まりのみ許可し、
-  `INSERT/UPDATE/DELETE/DROP/...` 等を検出すると拒否します。
+  `INSERT/UPDATE/DELETE/DROP/...` 等を検出すると拒否します (文字列関数の `REPLACE()` は対象外)。
   テーブルを作ってしまう `SELECT ... INTO` も拒否対象です
   (一次防御はあくまで Redash データソースが read-only レプリカであること)。
   解除する場合のみ `REDASH_ALLOW_WRITE=1`。
+- **保存クエリの更新**: `update_query` は SQL 本文だけを書き換え、名前・パラメータ定義・可視化は変えません。
+  保存する SQL にも `run_query` と同じ read-only ガードをかけます。
+  `get_query` で取得した `version` を必須とし、一致しなければ Redash が 409 を返します。
+  ただし Redash は本文を更新しても `version` を増やさないため、他者の編集はこれでは検出できません
+  (2026-09 に実機で確認)。上書きする前に `get_query` で本文を取り直して確かめてください。
+  書き換えられる範囲は、API キーの持ち主の Redash 上の権限に従います。
 - **行数キャップ**: 結果は既定 1000 行で切り、超過時は `truncated: true` と `note` で通知します
   (`max_rows` 引数 / `REDASH_MAX_ROWS` で調整)。
 - `profiles/*.env` / `.env` は `.gitignore` 済み。API キーはコミットされません。

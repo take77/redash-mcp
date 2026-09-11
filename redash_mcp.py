@@ -11,6 +11,9 @@ Redash MCP server (read-only oriented).
 
 Claude Code から Redash を直接叩くための MCP サーバー。
 本番レプリカ(read-only)に対するアドホック SQL 実行 / 保存クエリ実行 / 各種参照を提供する。
+このサーバー自身が書き込むのは、update_query で更新する保存クエリの SQL 本文だけ。
+実行する SQL は read-only ガードで検査するが、ガードだけで DB への書き込みは防ぎ切れない。
+DB を守る一次防御は read-only のデータソース。
 
 接続情報は環境変数、または env ファイルから読む。読み込み元は次の優先順:
     1. MCP 設定の -e で渡された環境変数 (最優先)
@@ -161,9 +164,12 @@ def _raise_for_status(resp: httpx.Response) -> None:
 # into を含むのは SELECT ... INTO 対策。PostgreSQL では CREATE TABLE AS と等価に
 # テーブルを作るため、SELECT 始まりでも通してはいけない。
 # (INSERT INTO は insert 側で既に弾かれる)
+# replace は直後に ( が続くときだけ通す。MySQL の REPLACE 文は INTO を省略できる
+# (REPLACE t (a) VALUES (1)) ため、into では捕まらない。一方で文字列関数 REPLACE()
+# と BigQuery の SELECT * REPLACE (...) は読み取り SQL なので、弾いてはいけない。
 _FORBIDDEN = re.compile(
     r"\b(insert|into|update|delete|drop|alter|truncate|create|grant|revoke|"
-    r"merge|replace|call|do|copy|vacuum|analyze|reindex|cluster|comment\s+on)\b",
+    r"merge|replace(?!\s*\()|call|do|copy|vacuum|analyze|reindex|cluster|comment\s+on)\b",
     re.IGNORECASE,
 )
 _ALLOWED_START = re.compile(r"^\s*(with|select|explain|show)\b", re.IGNORECASE)
@@ -320,12 +326,12 @@ async def list_queries(search: str | None = None, page_size: int = 25, page: int
     """
     _require_config()
     params: dict[str, Any] = {"page": page, "page_size": page_size}
-    path = "/api/queries"
+    # 検索も一覧と同じエンドポイントに q を付けて行う。/api/queries/search は
+    # 新しい Redash で廃止され、301 で /api/queries?q= に転送される (httpx は追わない)。
     if search:
-        path = "/api/queries/search"
-        params = {"q": search, "page": page, "page_size": page_size}
+        params["q"] = search
     async with _client() as client:
-        data = await _get(client, path, params=params)
+        data = await _get(client, "/api/queries", params=params)
         results = data.get("results", data) if isinstance(data, dict) else data
         return [
             {
@@ -342,7 +348,10 @@ async def list_queries(search: str | None = None, page_size: int = 25, page: int
 
 @mcp.tool()
 async def get_query(query_id: int) -> dict:
-    """保存クエリの詳細 (SQL 本文・パラメータ定義・データソース等) を返す。"""
+    """保存クエリの詳細 (SQL 本文・パラメータ定義・データソース等) を返す。
+
+    version は update_query に渡す値。schedule が null なら自動更新は無い。
+    """
     _require_config()
     async with _client() as client:
         q = await _get(client, f"/api/queries/{query_id}")
@@ -355,6 +364,37 @@ async def get_query(query_id: int) -> dict:
             "latest_query_data_id": q.get("latest_query_data_id"),
             "updated_at": q.get("updated_at"),
             "tags": q.get("tags"),
+            "is_draft": q.get("is_draft"),
+            "is_archived": q.get("is_archived"),
+            "schedule": q.get("schedule"),
+            "version": q.get("version"),
+        }
+
+
+@mcp.tool()
+async def update_query(query_id: int, query: str, version: int) -> dict:
+    """保存クエリの SQL 本文だけを書き換える。名前・パラメータ定義・可視化は変えない。
+
+    Args:
+        query_id: 書き換える保存クエリの ID。
+        query: 新しい SQL 本文。run_query と同じ read-only ガードを通す。
+        version: 直前に get_query で取得した version。一致しなければ Redash が 409 を返す。
+            ただし Redash は本文を更新しても version を増やさない (2026-09 に実機で確認)
+            ため、これでは他者の編集を検出できない。上書きしてよいかは、直前に
+            get_query で本文を取り直して確かめること。
+    """
+    # 保存した SQL は後で誰かが実行するので、実行時と同じ基準で保存時にも弾く。
+    _assert_read_only(query)
+    _require_config()
+    async with _client() as client:
+        q = await _post(
+            client, f"/api/queries/{query_id}", {"query": query, "version": version}
+        )
+        return {
+            "id": q.get("id"),
+            "name": q.get("name"),
+            "version": q.get("version"),
+            "updated_at": q.get("updated_at"),
         }
 
 

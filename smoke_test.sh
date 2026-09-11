@@ -17,7 +17,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 server_path="$script_dir/redash_mcp.py"
 expected_tool_count=9
-asserted_response_ids="1 2 3 4 5 6 7 8"
+asserted_response_ids="1 2 3 4 5 6 7 8 9"
 max_wait_sec=30
 
 response_file="$(mktemp)"
@@ -77,6 +77,8 @@ collect_responses() {
     # 存在しない query_id に送る。ガードが壊れていても実在のクエリは書き換わらない。
     printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"update_query","arguments":{"query_id":999999999,"query":"CREATE TABLE smoke_must_not_exist (id int)","version":1}}}'
     printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"list_queries","arguments":{"search":"a","page_size":1}}}'
+    # 存在しないテーブルを指す。ガードが壊れていても実データは書き換わらない。
+    printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"run_query","arguments":{"sql":"SELECT 1; REPLACE smoke_must_not_exist (a) VALUES (1)","data_source_id":1}}}'
     wait_for_asserted_responses
   } | uv run "$server_path" >"$response_file" 2>"$log_file" || true
 }
@@ -142,6 +144,8 @@ assert_response_contains 5 "SELECT ... INTO が read-only ガードに弾かれ�
 assert_response_lacks 6 "文字列関数 REPLACE() を含む SELECT はガードに弾かれない" 'キーワード (REPLACE)'
 # 保存クエリの更新でも、書き込み系の SQL は保存させない。
 assert_response_contains 7 "update_query も read-only ガードを通す" '読み取り専用 SQL のみ許可しています'
+# MySQL の REPLACE 文は INTO を省略できるので、into ではなく replace で弾けなければならない。
+assert_response_contains 9 "INTO を省いた REPLACE 文が read-only ガードに弾かれる" 'キーワード (REPLACE) を検出した'
 
 if has_redash_credentials; then
   assert_response_contains 4 "Redash からデータソース一覧を取得できる" '"isError":false'

@@ -120,9 +120,10 @@ assert_response_lacks() {
 
 assert_tool_count() {
   local actual
-  # tools/list は 1 行で返るため、行数ではなく出現数を数える。
+  # tools/list (id 2) は 1 行で返るため、その行の中の出現数を数える。出力全体を
+  # 数えると、別の応答にある "inputSchema" という名前 (データソース名など) も数えてしまう。
   # 起動に失敗していると 0 件になるので、そこでスクリプトを止めない。
-  actual="$(grep -o '"inputSchema"' "$response_file" | wc -l || true)"
+  actual="$(print_response_line 2 | grep -o '"inputSchema"' | wc -l || true)"
   if [ "$actual" -eq "$expected_tool_count" ]; then
     report yes "ツールが $expected_tool_count 個登録されている"
   else

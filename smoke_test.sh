@@ -36,13 +36,21 @@ warm_up_dependencies() {
   uv run "$server_path" </dev/null >/dev/null 2>&1 || true
 }
 
+# 指定した id の応答行を出力する。照合するのは行頭にある応答自身の id だけ。
+# 単に "id":N で探すと、別の応答の structuredContent にあるデータソース ID や
+# クエリ ID にも一致し、失敗した応答の代わりにそちらを見て成功と誤判定する。
+print_response_line() {
+  local response_id="$1"
+  grep -E "^\{\"jsonrpc\":\"2\.0\",\"id\":$response_id," "$response_file"
+}
+
 # 最後に送ったリクエストが最初に返るとは限らない。ローカルで弾かれる SQL は
 # Redash への往復より速く返るため、id をひとつだけ待って stdin を閉じると
 # 処理中の応答が取り消される。表明対象の応答が揃うまで待つこと。
 all_asserted_responses_received() {
   local response_id
   for response_id in $asserted_response_ids; do
-    grep -q "\"id\":$response_id" "$response_file" || return 1
+    print_response_line "$response_id" >/dev/null || return 1
   done
 }
 
@@ -86,7 +94,7 @@ report() {
 # 指定した id の応答行だけを見る (サーバーログではなくクライアントが受け取る内容)。
 assert_response_contains() {
   local response_id="$1" label="$2" expected="$3"
-  if grep "\"id\":$response_id" "$response_file" | grep -qF "$expected"; then
+  if print_response_line "$response_id" | grep -qF "$expected"; then
     report yes "$label"
   else
     report no "$label"
@@ -97,11 +105,11 @@ assert_response_contains() {
 # 応答そのものが無いときに「含まない」と誤って通さないよう、先に存在を見る。
 assert_response_lacks() {
   local response_id="$1" label="$2" unexpected="$3"
-  if ! grep -q "\"id\":$response_id" "$response_file"; then
+  if ! print_response_line "$response_id" >/dev/null; then
     report no "$label (応答が届いていない)"
     return
   fi
-  if grep "\"id\":$response_id" "$response_file" | grep -qF "$unexpected"; then
+  if print_response_line "$response_id" | grep -qF "$unexpected"; then
     report no "$label"
   else
     report yes "$label"
